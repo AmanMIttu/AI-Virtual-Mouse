@@ -1,45 +1,89 @@
+# AI Virtual Mouse — Motion Desk
 
-## Project Description:
-In this project, I am using my hand as a virtual mouse than can do everything that a mouse does without even touching your system. I am using the webcam of my system to detect my hands. It will then create a bounding box around my hand and focus on two fingers: The fore finger and the middle finger. The fore finger will act as a cursor and moving it around, we will be moving the cursor around. Now, inorder to successfully click using hand tracking, it is detecting the distance between the fore finger and the middle finger. If they are joined together, then it will perform a click. 
+A desktop hand-tracking control room built with **PySide6 / Qt Widgets**, OpenCV, and MediaPipe. Motion Desk opens in preview-only mode; it never moves the pointer or clicks until the user explicitly enables system pointer control.
 
-Furthermore, a smoothness factor was added as the movement was really shaky.
+![Original webcam gesture demonstration](VirtualMouse.gif)
 
+The GIF predates the Qt control room; launch the desktop app with the command below to inspect the new interface.
 
-## Requirements:
-Following modules need to be installed for it to work properly:
-- OpenCV
-- Mediapipe
-- Autopy
+## Features
 
-### OpenCV:
-OpenCV is a huge open-source library for computer vision, machine learning, and image processing. OpenCV supports a wide variety of programming languages like Python, C++, Java, etc. It can process images and videos to identify objects, faces, or even the handwriting of a human.
+- Live webcam preview with MediaPipe hand landmarks and gesture state.
+- Camera device index selection and connection/error status.
+- Start and stop tracking controls with safe camera and detector cleanup.
+- **Preview only by default.** The system pointer toggle starts unchecked; enabling it is an explicit action.
+- Cursor sensitivity, smoothing, and pinch-distance controls.
+- Index-up/middle-down pointer movement; index/middle pinch click, debounced until release.
+- Closing the app requests worker shutdown; the responsive window stays open until the worker exits and cleanup finishes. If a camera backend blocks indefinitely while reading a frame, shutdown remains pending because there is no safe universal way to interrupt that backend call.
 
-It can be installed using "pip install opencv-python"
+## Architecture
 
+- `virtual_mouse_app.py` — responsive Qt control room, camera selection, status, settings, and explicit safety toggle.
+- `tracking_worker.py` — background `QThread` for camera capture, MediaPipe processing, rendering, and UI signals. It imports camera dependencies only when tracking starts.
+- `HandTracking.py` — MediaPipe landmark detection and drawing helpers; supports the original method names for compatibility.
+- `mouse_controller.py` — preview-safe gesture-to-pointer adapter. It has no active backend by default and accepts injected callbacks only when control is enabled.
+- `mouse_logic.py` — pure coordinate mapping, smoothing, and gesture predicates.
+- `VirtualMouse.py` — legacy OpenCV entry point; preview-only by default and requires `--enable-mouse-control` for real pointer input.
 
-### Mediapipe:
-MediaPipe is a framework for building multimodal (eg. video, audio, any time series data), cross platform (i.e Android, iOS, web, edge devices) applied ML pipelines.
+## Requirements and setup
 
-It can be installed using "pip install mediapipe"
+Python **3.11**, a webcam, and a desktop session are required. The repository .venv has been validated with Python 3.11.9. PySide6 provides the native Qt interface; MediaPipe performs hand landmark detection; the OpenCV contrib build supplies the cv2 capture and drawing API required by MediaPipe; PyAutoGUI is used only after pointer control is explicitly enabled. Camera and pointer permissions vary by OS. A headless session cannot use the interactive window.
 
-### Autopy:
-AutoPy is a simple, cross-platform GUI automation library for Python. It includes functions for controlling the keyboard and mouse, finding colors and bitmaps on-screen, and displaying alerts.
+On Windows PowerShell, use the Python 3.11 launcher entry when available:
 
-It can be installed using "pip install autopy"
+```powershell
+py -3.11 --version
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m pip install pytest
+python virtual_mouse_app.py
+```
 
-## Important Note:
-I faced alot of dependency issues throughout this project. Some of the issues and their solutions are as follows:
-- autopy not installing: This is because autopy currently doesn't support Python versions above 3.8
-- webcam not opening: It was a bug in mediapipe and was fixed in latest python versions
+If `py -3.11` is unavailable, install Python 3.11 and use its full `python.exe` path in place of `py -3.11` when creating `.venv`. Confirm the new environment with `python --version` before installing dependencies.
 
-Hence, inorder for the project to run smoothly, you need to degrade the Python version to 3.8
+Choose the camera index and press **Start preview**. The window remains in safe preview mode unless **Enable system pointer** is checked. Press **Stop** or close the window to end tracking.
 
-### How to Degrade Python Version:
-Follow the following steps:
-- Uninstall Python from add/remove programs
-- Go to AppData and remove any python folder you see.
-- Download Python 3.8 from this link : [Python 3.8](https://www.python.org/downloads/release/python-380/)
-- Install it.
-- Open command promt and run "pip" inorder to confirm installation.
-- Your Python version has been degraded :)
+The legacy preview is also safe by default:
 
+```powershell
+python VirtualMouse.py --camera 0
+```
+
+Explicitly enable real cursor movement and clicks only when intended:
+
+```powershell
+python VirtualMouse.py --camera 0 --enable-mouse-control
+```
+
+Run tests without camera or system input:
+
+```powershell
+$env:QT_QPA_PLATFORM = "offscreen"
+python -m pytest -q
+```
+
+## Gestures and settings
+
+- **Index up, middle down:** move pointer within the inset camera area.
+- **Index and middle fingers pinched:** send one click; release before another click.
+- **Sensitivity:** scales cursor travel from the center of the camera region.
+- **Smoothing:** higher values reduce jitter but slow the cursor response.
+- **Pinch distance:** pixel threshold in the camera frame; tune for camera distance and resolution.
+
+## Limitations and hardware notes
+
+This is a webcam prototype, not a general accessibility device. Detection varies with lighting, hand orientation, occlusion, camera quality, and MediaPipe's handedness assumptions. Pointer control may require OS accessibility permissions and can be unavailable in locked-down, Wayland, or headless environments. Camera indices are system-specific.
+
+### Manual webcam validation
+
+The project owner reports a manual Python 3.11.9 test in which Motion Desk opened the webcam preview, displayed hand landmarks that responded to hand movement, and stopped tracking with the camera released. This release-preparation pass did not repeat the webcam test. The application defaults to preview-only; actual pointer movement and pinch-to-click have not been validated on hardware.
+
+## Tests and attribution
+
+Tests cover coordinate mapping, smoothing, gesture and click debounce, safe preview callbacks, Qt window launch, settings, start/stop transitions, unavailable-camera handling, and side-effect-free module import. Automated tests do not execute mouse or keyboard actions.
+
+The Python 3.11.9 environment passed pip check; imports for PySide6 6.8.3, OpenCV 4.11.0 (opencv-contrib-python), MediaPipe 0.10.21, NumPy 1.26.4, and PyAutoGUI 0.9.54 succeeded. The non-hardware test suite passed 12 tests. Automated tests do not access the webcam or send system mouse/keyboard input.
+
+MIT License; see [LICENSE](LICENSE). Original concept and animated demo by Aman; the original demo is preserved.

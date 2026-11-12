@@ -1,56 +1,88 @@
-import cv2
-import numpy as np
+"""Legacy OpenCV preview entry point; system input is opt-in."""
+from __future__ import annotations
+
+import argparse
 import time
-import HandTracking as ht
-import autopy   # Install using "pip install autopy"
 
-### Variables Declaration
-pTime = 0               # Used to calculate frame rate
-width = 640             # Width of Camera
-height = 480            # Height of Camera
-frameR = 100            # Frame Rate
-smoothening = 8         # Smoothening Factor
-prev_x, prev_y = 0, 0   # Previous coordinates
-curr_x, curr_y = 0, 0   # Current coordinates
+from mouse_controller import ControllerSettings, MouseController
 
-cap = cv2.VideoCapture(0)   # Getting video feed from the webcam
-cap.set(3, width)           # Adjusting size
-cap.set(4, height)
 
-detector = ht.handDetector(maxHands=1)                  # Detecting one hand at max
-screen_width, screen_height = autopy.screen.size()      # Getting the screen size
-while True:
-    success, img = cap.read()
-    img = detector.findHands(img)                       # Finding the hand
-    lmlist, bbox = detector.findPosition(img)           # Getting position of hand
+def run(camera: int = 0, width: int = 640, height: int = 480,
+        margin: int = 80, smoothing: float = 7.0,
+        sensitivity: float = 1.0, click_threshold: float = 35.0,
+        enable_mouse_control: bool = False) -> None:
+    """Run the legacy preview loop. Without explicit opt-in it is read-only."""
+    import cv2
+    import HandTracking as ht
 
-    if len(lmlist)!=0:
-        x1, y1 = lmlist[8][1:]
-        x2, y2 = lmlist[12][1:]
+    cap = cv2.VideoCapture(camera)
+    if not cap.isOpened():
+        cap.release()
+        raise RuntimeError(f"Could not open camera index {camera}")
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    detector = ht.HandDetector(max_hands=1)
+    controller = MouseController()
+    controller.configure(ControllerSettings(margin, smoothing, sensitivity, click_threshold))
+    controller.set_enabled(enable_mouse_control)
+    previous_time = time.perf_counter()
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                raise RuntimeError("Camera stopped returning frames")
+            frame = cv2.flip(frame, 1)
+            frame = detector.find_hands(frame)
+            landmarks, _ = detector.find_position(frame)
+            fingers = detector.fingers_up() if landmarks else [0] * 5
+            index = tuple(landmarks[8][1:]) if len(landmarks) > 8 else None
+            distance = None
+            if len(landmarks) > 12 and fingers[1:3] == [1, 1]:
+                distance, frame, _ = detector.find_distance(8, 12, frame)
+            screen_size = None
+            mover = clicker = None
+            if enable_mouse_control:
+                import pyautogui
+                screen_size = pyautogui.size()
+                mover = pyautogui.moveTo
+                clicker = pyautogui.click
+            gesture, _ = controller.update(
+                fingers, index, distance, (frame.shape[1], frame.shape[0]),
+                screen_size, mover, clicker,
+            )
+            cv2.rectangle(frame, (margin, margin),
+                          (frame.shape[1] - margin, frame.shape[0] - margin),
+                          (255, 0, 255), 2)
+            now = time.perf_counter()
+            fps = 1 / max(now - previous_time, 1e-9)
+            previous_time = now
+            label = "CONTROL ON" if enable_mouse_control else "PREVIEW ONLY"
+            cv2.putText(frame, f"{label} · {gesture} · {fps:.0f} FPS", (12, 32),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 0, 255), 2)
+            cv2.imshow("AI Virtual Mouse — press Q to quit", frame)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+    finally:
+        cap.release()
+        detector.close()
+        cv2.destroyAllWindows()
 
-        fingers = detector.fingersUp()      # Checking if fingers are upwards
-        cv2.rectangle(img, (frameR, frameR), (width - frameR, height - frameR), (255, 0, 255), 2)   # Creating boundary box
-        if fingers[1] == 1 and fingers[2] == 0:     # If fore finger is up and middle finger is down
-            x3 = np.interp(x1, (frameR,width-frameR), (0,screen_width))
-            y3 = np.interp(y1, (frameR, height-frameR), (0, screen_height))
 
-            curr_x = prev_x + (x3 - prev_x)/smoothening
-            curr_y = prev_y + (y3 - prev_y) / smoothening
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--camera", type=int, default=0)
+    parser.add_argument("--width", type=int, default=640)
+    parser.add_argument("--height", type=int, default=480)
+    parser.add_argument("--margin", type=int, default=80)
+    parser.add_argument("--smoothing", type=float, default=7.0)
+    parser.add_argument("--sensitivity", type=float, default=1.0)
+    parser.add_argument("--click-threshold", type=float, default=35.0)
+    parser.add_argument("--enable-mouse-control", action="store_true",
+                        help="explicitly enable real pointer movement and pinch clicks")
+    args = parser.parse_args()
+    run(args.camera, args.width, args.height, args.margin, args.smoothing,
+        args.sensitivity, args.click_threshold, args.enable_mouse_control)
 
-            autopy.mouse.move(screen_width - curr_x, curr_y)    # Moving the cursor
-            cv2.circle(img, (x1, y1), 7, (255, 0, 255), cv2.FILLED)
-            prev_x, prev_y = curr_x, curr_y
 
-        if fingers[1] == 1 and fingers[2] == 1:     # If fore finger & middle finger both are up
-            length, img, lineInfo = detector.findDistance(8, 12, img)
-
-            if length < 40:     # If both fingers are really close to each other
-                cv2.circle(img, (lineInfo[4], lineInfo[5]), 15, (0, 255, 0), cv2.FILLED)
-                autopy.mouse.click()    # Perform Click
-
-    cTime = time.time()
-    fps = 1/(cTime-pTime)
-    pTime = cTime
-    cv2.putText(img, str(int(fps)), (20, 50), cv2.FONT_HERSHEY_PLAIN, 3, (255, 0, 0), 3)
-    cv2.imshow("Image", img)
-    cv2.waitKey(1)
+if __name__ == "__main__":
+    main()
